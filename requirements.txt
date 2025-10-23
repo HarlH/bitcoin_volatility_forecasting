@@ -1,0 +1,20 @@
+# Data Handling & API
+pandas
+numpy
+ccxt
+python-dotenv # For securely managing API keys
+
+# Statistical Modeling (GARCH)
+arch
+
+# Deep Learning (LSTM)
+tensorflow # Use the standard CPU version
+
+# MLOps & Experiment Tracking
+mlflow
+scikit-learn
+joblib
+
+# Web Service for Deployment
+fastapi
+uvicorn
