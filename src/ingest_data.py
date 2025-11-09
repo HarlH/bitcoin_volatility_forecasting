@@ -1,14 +1,9 @@
 """
-DATA INGESTION MODULE - Crypto Volatility Forecasting
-=====================================================
+Data Ingestion Module for Cryptocurrency Market Data
 
-This module fetches cryptocurrency data from Yahoo Finance.
-
-What it does (in simple terms):
-- Connects to Yahoo Finance (like visiting a website)
-- Downloads historical price data (Open, High, Low, Close, Volume)
-- Saves it to a CSV file for later use
-- Provides easy functions to get data whenever you need it
+Fetches OHLCV (Open, High, Low, Close, Volume) data from Yahoo Finance API.
+Supports multiple cryptocurrencies and timeframes with built-in data validation
+and persistence to CSV format.
 
 """
 
@@ -20,7 +15,6 @@ from pathlib import Path
 import logging
 from typing import Optional
 
-# Set up logging 
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s'
@@ -54,18 +48,12 @@ class CryptoDataFetcher:
     
     def __init__(self, symbol: str = 'BTC-USD', data_dir: str = 'data/raw'):
         """
-        Initialize the data fetcher.
+        Initialize the data fetcher for specified cryptocurrency.
         
         Args:
             symbol: Cryptocurrency symbol (e.g., 'BTC-USD', 'ETH-USD')
-            data_dir: Directory to save downloaded data
+            data_dir: Output directory for CSV files
             
-        Example:
-            # For Bitcoin
-            fetcher = CryptoDataFetcher('BTC-USD')
-            
-            # For Ethereum
-            fetcher = CryptoDataFetcher('ETH-USD')
         """
         self.symbol = symbol
         self.data_dir = Path(data_dir)
@@ -75,63 +63,87 @@ class CryptoDataFetcher:
     
     def fetch_historical_data(
         self,
-        days_back: int = 365,
-        interval: str = '1h',
-        save_to_csv: bool = True
+        days_back: int = 730,
+        timeframe: str = '1d',
+        save_to_csv: bool = True,
+        use_ticker_object: bool = False
     ) -> pd.DataFrame:
         """
-        Fetch historical cryptocurrency data.
-
+        Fetch historical OHLCV data with automatic Yahoo Finance limit handling.
+        
+        Yahoo Finance imposes data availability limits:
+        - Minute intervals: 7 days maximum
+        - Hourly intervals: 60 days maximum  
+        - Daily intervals: Full historical data available
+        
         Args:
-            days_back: How many days of history to fetch (e.g., 365 = 1 year)
-            interval: Time between data points ('1h' = hourly, '1d' = daily)
-            save_to_csv: Whether to save the data to a CSV file
+            timeframe: Candle interval ('1m', '5m', '1h', '1d', etc.)
+            days_back: Number of days to fetch (default: 730 = 2 years)
+            save_to_csv: Persist data to disk
+            use_ticker_object: Use yf.Ticker() instead of yf.download()
             
         Returns:
-            DataFrame with columns: Open, High, Low, Close, Volume
+            DataFrame with OHLCV columns and datetime index
+            
+        Raises:
+            ValueError: If invalid timeframe specified
             
         Example:
-            data = fetcher.fetch_historical_data(days_back=365, interval='1h')
-            print(f"Got {len(data)} data points")
+            >>> df = fetcher.fetch_historical_data('1d', 730)
+            >>> df.columns
+            Index(['Open', 'High', 'Low', 'Close', 'Volume'], dtype='object')
         """
-        
-        # Validate interval
-        if interval not in self.VALID_INTERVALS:
+        if timeframe not in self.VALID_INTERVALS:
             raise ValueError(
-                f"Invalid interval '{interval}'. "
+                f"Invalid interval '{timeframe}'. "
                 f"Must be one of: {self.VALID_INTERVALS}"
             )
         
-        logger.info(f"Fetching {days_back} days of {interval} data for {self.symbol}...")
+        # Enforce Yahoo Finance API limits
+        if timeframe in ['1m', '2m', '5m', '15m', '30m'] and days_back > 7:
+            logger.warning(
+                f"Minute data limited to 7 days. Adjusting from {days_back} to 7."
+            )
+            days_back = 7
+        elif timeframe in ['1h', '90m', '60m'] and days_back > 60:
+            logger.warning(
+                f"Hourly data limited to 60 days. Adjusting from {days_back} to 60."
+            )
+            days_back = 60
+        
+        logger.info(f"Fetching {days_back} days of {timeframe} data for {self.symbol}")
         
         try:
-            # Calculate start and end dates
             end_date = datetime.now()
             start_date = end_date - timedelta(days=days_back)
             
-            # Download data from Yahoo Finance
-            # This is where the magic happens!
-            df = yf.download(
-                self.symbol,
-                start=start_date,
-                end=end_date,
-                interval=interval,
-                progress=False  # Hide progress bar for cleaner output
-            )
+            # Two API approaches: functional vs OOP
+            # Functional is faster for batch downloads, OOP provides metadata access
+            if use_ticker_object:
+                logger.info("Using yf.Ticker().history() method")
+                ticker = yf.Ticker(self.symbol)
+                df = ticker.history(start=start_date, end=end_date, interval=timeframe)
+            else:
+                logger.info("Using yf.download() method")
+                df = yf.download(
+                    self.symbol,
+                    start=start_date,
+                    end=end_date,
+                    interval=timeframe,
+                    progress=False
+                )
             
             if df.empty:
                 logger.error(f"No data retrieved for {self.symbol}")
                 return pd.DataFrame()
             
-            # Clean up the data
             df = self._clean_data(df)
             
-            logger.info(f"Successfully fetched {len(df)} data points")
+            logger.info(f"Successfully fetched {len(df)} candles")
             logger.info(f"Date range: {df.index[0]} to {df.index[-1]}")
             
-            # Save to CSV if requested
             if save_to_csv:
-                self._save_to_csv(df, interval)
+                self._save_to_csv(df, timeframe)
             
             return df
             
@@ -141,8 +153,8 @@ class CryptoDataFetcher:
     
     def fetch_latest_data(
         self,
-        period: str = '7d',
-        interval: str = '1h'
+        period: str = '30d',
+        interval: str = '1d'
     ) -> pd.DataFrame:
         """
         Fetch the most recent data (for real-time predictions).
@@ -154,9 +166,6 @@ class CryptoDataFetcher:
         Returns:
             DataFrame with recent data
             
-        Example:
-            # Get last 7 days of hourly data
-            recent_data = fetcher.fetch_latest_data(period='7d', interval='1h')
         """
         logger.info(f"Fetching latest {period} of data for {self.symbol}...")
         
@@ -185,13 +194,21 @@ class CryptoDataFetcher:
         """
         Clean and prepare the data.
         """
-        # Make a copy to avoid modifying the original
+
         df = df.copy()
-        
-        # Remove rows with missing values
+        initial_len = len(df)     
+
+        ## Drop incomplete candles   
         df.dropna(inplace=True)
         
-        # Rename columns to be consistent (remove any extra spaces or weird formatting)
+        # Filter zero/negative volume (data quality issue)
+        if 'Volume' in df.columns:
+            df = df[df['Volume'] > 0]
+            removed = initial_len - len(df)
+            if removed > 0:
+                logger.info(f"Removed {removed} rows with invalid volume")
+        
+        # Standardize column names (Yahoo sometimes returns tuples)
         new_columns = []
         for col in df.columns:
             if isinstance(col, tuple):
@@ -210,13 +227,14 @@ class CryptoDataFetcher:
         if not isinstance(df.index, pd.DatetimeIndex):
             df.index = pd.to_datetime(df.index)
         df.sort_index(inplace=True)
-        
+
+        logger.info(f"Cleaned data: {len(df)} valid rows")
         return df
     
     def _save_to_csv(self, df: pd.DataFrame, interval: str) -> None:
         """
         Save data to a CSV file.
-        
+        Format: {symbol}_{interval}_{date}.csv
         The file will be named like: BTC-USD_1h_20241104.csv
         """
         filename = f"{self.symbol}_{interval}_{datetime.now().strftime('%Y%m%d')}.csv"
@@ -298,11 +316,11 @@ def example_usage():
     print("=" * 70)
     
     # Example 1: Fetch Bitcoin data
-    print("\n[Example 1] Fetching 1 year of hourly Bitcoin data...")
+    print("\n[Example 1] Fetching 2 year of daily Bitcoin data...")
     btc_fetcher = CryptoDataFetcher(symbol='BTC-USD')
     btc_data = btc_fetcher.fetch_historical_data(
-        days_back=365,
-        interval='1h',
+        days_back=730,
+        timeframe='1d',
         save_to_csv=True
     )
     
@@ -319,8 +337,8 @@ def example_usage():
         print(f"  {key}: {value}")
     
     # Example 3: Fetch latest data (for predictions)
-    print("\n[Example 3] Fetching latest 7 days...")
-    latest_data = btc_fetcher.fetch_latest_data(period='7d', interval='1h')
+    print("\n[Example 3] Fetching latest 30 days...")
+    latest_data = btc_fetcher.fetch_latest_data(period='30d', interval='1d')
     print(f"Got {len(latest_data)} recent data points")
     
     # Example 4: Try Ethereum
@@ -328,7 +346,7 @@ def example_usage():
     eth_fetcher = CryptoDataFetcher(symbol='ETH-USD')
     eth_data = eth_fetcher.fetch_historical_data(
         days_back=30,
-        interval='1h'
+        timeframe='1d'
     )
     print(f"Got {len(eth_data)} Ethereum data points")
     
