@@ -2,13 +2,16 @@
 pandas
 numpy
 ccxt
+yfinance   # Yahoo Finance: alternative to ccxt
 python-dotenv # For securely managing API keys
+
 
 # Statistical Modeling (GARCH)
 arch
 
 # Deep Learning (LSTM)
 tensorflow # Use the standard CPU version
+ 
 
 # MLOps & Experiment Tracking
 mlflow
@@ -18,3 +21,11 @@ joblib
 # Web Service for Deployment
 fastapi
 uvicorn
+
+# Visualization & Web Dashboard
+streamlit             
+plotly               
+matplotlib            
+
+# Utilities
+python-dateutil
