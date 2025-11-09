@@ -1,20 +1,26 @@
 # Data Handling & API
-pandas
-numpy
-ccxt
-python-dotenv # For securely managing API keys
+pandas                 # Like Excel but for Python - handles data tables
+numpy                  # Math library - fast calculations
+yfinance              # Downloads BTC price data from Yahoo Finance (easy!)
+ccxt                  # Alternative: connects to crypto exchanges
+python-dotenv         # Keeps API keys secret (like a password manager)
 
 # Statistical Modeling (GARCH)
-arch
+arch                  # Traditional volatility forecasting (the experienced meteorologist)
 
 # Deep Learning (LSTM)
-tensorflow # Use the standard CPU version
+tensorflow            # Neural network library (the AI brain)
+keras                 # Makes TensorFlow easier to use (user-friendly wrapper)
 
 # MLOps & Experiment Tracking
-mlflow
-scikit-learn
-joblib
+mlflow                # Tracks all experiments (like a lab notebook)
+scikit-learn          # Machine learning utilities (helper tools)
+joblib                # Saves trained models to disk
 
-# Web Service for Deployment
-fastapi
-uvicorn
+# Visualization & Web Dashboard
+streamlit             # Creates beautiful web apps (your TV weather channel!)
+plotly                # Interactive charts (zoom, hover, explore)
+matplotlib            # Static charts (classic graphs)
+
+# Utilities
+python-dateutil       # Makes working with dates easier
