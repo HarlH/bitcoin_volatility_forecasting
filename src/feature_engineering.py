@@ -1,15 +1,16 @@
 """
-FEATURE ENGINEERING MODULE - Crypto Volatility Forecasting
-==========================================================
+Feature Engineering Module for Volatility Forecasting
 
-This module transforms raw OHLCV data into features for volatility forecasting.
+Transforms raw OHLCV data into features suitable for time series modeling.
+Implements financial volatility metrics and technical indicators commonly
+used in quantitative trading and risk management.
 
-What it does:
-1. Calculates log returns (standardized price changes)
-2. Calculates realized volatility (our target variable)
-3. Adds technical indicators (volume, momentum, etc.)
-4. Creates lagged features (past values for time series)
-5. Prepares data for model training
+Key features:
+- Log returns calculation
+- Realized volatility (multiple horizons)
+- Technical indicators (momentum, volume)
+- Lagged feature generation for time series
+- Data cleaning and outlier handling
 """
 
 import pandas as pd
@@ -29,6 +30,12 @@ logger = logging.getLogger(__name__)
 class VolatilityFeatureEngineer:
     """
     Calculates volatility and creates features for forecasting.    
+    
+    Converts OHLCV market data into ML-ready features including:
+    - Returns and volatility metrics
+    - Price momentum and trend indicators  
+    - Volume-based features
+    - Lagged time series features
     Example:
         engineer = VolatilityFeatureEngineer()
         df = engineer.calculate_log_returns(df)
@@ -48,36 +55,27 @@ class VolatilityFeatureEngineer:
     
     def calculate_log_returns(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Calculate log returns from close prices.
+        Calculate logarithmic returns from price series.
         
-        ================
-        Log returns have nice mathematical properties:
-        - They're symmetric (10% up, then 10% down gets you back to start)
-        - They're additive over time
-        - They're more normally distributed 
-
-        FORMULA: log(Price_today / Price_yesterday)
+        Log returns are preferred over arithmetic returns for financial modeling:
+        - Symmetric (10% up then 10% down returns to origin)
+        - Time-additive (can sum over periods)
+        - Approximately normal distribution
         
-        Example:
-            Price went from $100 to $110
-            Regular return: (110-100)/100 = 10%
-            Log return: log(110/100) = 0.0953 ≈ 9.53%
+        Formula: r_t = ln(P_t / P_{t-1})
         
         Args:
             df: DataFrame with 'Close' column
             
         Returns:
-            DataFrame with added 'log_return' column
+            DataFrame with 'log_return' column added
+            
+        Note:
+            First row will be NaN (no prior price to calculate return)
         """
         df = df.copy()
-        
-        # Calculate log returns
-        # np.log() is natural logarithm (ln)
         df['log_return'] = np.log(df['Close'] / df['Close'].shift(1))
-        
-        # First row will be NaN (no previous price to compare to)
         logger.info(f"✅ Calculated log returns (first value is NaN)")
-        
         return df
     
     def calculate_realized_volatility(
@@ -88,10 +86,13 @@ class VolatilityFeatureEngineer:
     ) -> pd.DataFrame:
         """
         Calculate realized volatility using rolling standard deviation.
+       
+        Realized volatility measures historical price variability and is
+        commonly used as a target variable for volatility forecasting models.
+        
         1. Take log returns over a window (e.g., last 24 hours)
         2. Calculate standard deviation of those returns
         3. Annualize it (scale to yearly volatility)
-        
         Args:
             df: DataFrame with 'log_return' column
             window: Rolling window size (24 = 24 hours for hourly data)
@@ -114,7 +115,6 @@ class VolatilityFeatureEngineer:
         vol = df['log_return'].rolling(window=window).std()
         
         # Annualize the volatility
-        # Multiply by sqrt(window) due tovolatility scales with square root of time
         if annualize:
             vol = vol * np.sqrt(window)
         
@@ -193,6 +193,10 @@ class VolatilityFeatureEngineer:
         
         # 4. Volume change
         df['volume_change'] = df['Volume'].pct_change()
+
+        # Replace any infinities that might still occur
+        # df['volume_ratio'] = df['volume_ratio'].replace([np.inf, -np.inf], np.nan)
+        # df['volume_change'] = df['volume_change'].replace([np.inf, -np.inf], np.nan)
         
         logger.info("✅ Added volume-based features")
         
@@ -327,11 +331,68 @@ class VolatilityFeatureEngineer:
         
         X = df[feature_cols]
         y = df['target_vol']
-        
+
+        logger.info("  Cleaning data (removing infinities and outliers)...")
+        X, y = self._clean_training_data(X, y)
+
         logger.info(f"✅ Prepared training data:")
         logger.info(f"   Features (X): {X.shape} ({len(feature_cols)} features)")
         logger.info(f"   Target (y): {y.shape}")
         logger.info(f"   Feature columns: {feature_cols}")
+        
+        return X, y
+    def _clean_training_data(
+        self,
+        X: pd.DataFrame,
+        y: pd.Series
+    ) -> Tuple[pd.DataFrame, pd.Series]:
+        """
+        Clean data by removing infinities, NaNs, and extreme outliers.
+        
+        This prevents errors during model training.
+        
+        Args:
+            X: Features
+            y: Target
+            
+        Returns:
+            Cleaned X and y
+        """
+        initial_size = len(X)
+        
+        # 1. Replace infinities with NaN
+        X = X.replace([np.inf, -np.inf], np.nan)
+        y = y.replace([np.inf, -np.inf], np.nan)
+        
+        # 2. Remove rows where target is NaN
+        valid_target = ~y.isna()
+        X = X[valid_target]
+        y = y[valid_target]
+        
+        # 3. Remove rows with any NaN features
+        valid_features = ~X.isna().any(axis=1)
+        X = X[valid_features]
+        y = y[valid_features]
+        
+        # 4. Remove extreme outliers (values beyond 5 standard deviations)
+        # This catches cases where calculations produce unrealistic values
+        for col in X.columns:
+            mean = X[col].mean()
+            std = X[col].std()
+            if std > 0:  # Only if there's variation
+                # Keep values within 5 standard deviations
+                mask = (X[col] >= mean - 5*std) & (X[col] <= mean + 5*std)
+                X = X[mask]
+                y = y[mask]
+        
+        removed = initial_size - len(X)
+        pct_removed = (removed / initial_size) * 100
+        
+        logger.info(f"   Removed {removed} problematic rows ({pct_removed:.1f}%)")
+        logger.info(f"   Remaining: {len(X)} clean samples")
+        
+        if len(X) < 100:
+            logger.warning("⚠️  Very few samples remaining! Check your data quality.")
         
         return X, y
     
