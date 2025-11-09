@@ -16,6 +16,68 @@ import pandas_datareader as pdr
 from datetime import datetime, timedelta
 import os
 import numpy as np
+import requests
+import time
+
+
+def _fetch_from_coingecko(start_date, end_date):
+    """
+    Fetch Bitcoin data from CoinGecko API (free, no API key needed!)
+
+    ANALOGY: Like having a backup weather station when the first one is down
+    """
+
+    # CoinGecko API endpoint
+    url = "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart/range"
+
+    # Convert dates to Unix timestamps
+    start_timestamp = int(start_date.timestamp())
+    end_timestamp = int(end_date.timestamp())
+
+    params = {
+        'vs_currency': 'usd',
+        'from': start_timestamp,
+        'to': end_timestamp
+    }
+
+    response = requests.get(url, params=params, timeout=30)
+    response.raise_for_status()
+
+    data = response.json()
+
+    # Extract prices and volumes
+    prices = data['prices']
+    volumes = data['total_volumes']
+
+    # Create DataFrame
+    df = pd.DataFrame(prices, columns=['timestamp', 'Close'])
+    df['Volume'] = [v[1] for v in volumes]
+
+    # Convert timestamp to datetime
+    df['Date'] = pd.to_datetime(df['timestamp'], unit='ms')
+    df = df.set_index('Date')
+    df = df.drop('timestamp', axis=1)
+
+    # CoinGecko doesn't provide OHLC, so we approximate
+    # Open ≈ Previous Close, High ≈ Close * 1.01, Low ≈ Close * 0.99
+    df['Open'] = df['Close'].shift(1).fillna(df['Close'])
+    df['High'] = df['Close'] * 1.01
+    df['Low'] = df['Close'] * 0.99
+    df['Adj Close'] = df['Close']
+
+    # Resample to daily (CoinGecko returns hourly data)
+    df = df.resample('D').agg({
+        'Open': 'first',
+        'High': 'max',
+        'Low': 'min',
+        'Close': 'last',
+        'Volume': 'sum',
+        'Adj Close': 'last'
+    })
+
+    df = df.dropna()
+
+    return df
 
 
 def fetch_btc_data(years_back=2, save_path="data/btc_usd_raw.csv"):
@@ -48,23 +110,35 @@ def fetch_btc_data(years_back=2, save_path="data/btc_usd_raw.csv"):
     print(f"    From: {start_date.date()} to {end_date.date()}")
     print(f"    That's {years_back} years of Bitcoin price history!")
 
-    try:
-        # Download the data using pandas_datareader
-        # This connects to Yahoo Finance and gets the data
-        print("    Connecting to Yahoo Finance...")
-        df = pdr.get_data_yahoo('BTC-USD', start=start_date, end=end_date)
+    # Try multiple data sources
+    df = None
+    methods = [
+        ('pandas_datareader (Yahoo Finance)', lambda: pdr.get_data_yahoo('BTC-USD', start=start_date, end=end_date)),
+        ('CoinGecko API (Free)', lambda: _fetch_from_coingecko(start_date, end_date)),
+    ]
 
-        # Check if we got data
-        if df.empty:
-            raise ValueError("No data received! Check your internet connection.")
+    for method_name, method_func in methods:
+        try:
+            print(f"    Trying {method_name}...")
+            df = method_func()
 
-        print(f"    SUCCESS! Downloaded {len(df)} daily price points")
-        print(f"    Date range: {df.index[0].date()} to {df.index[-1].date()}")
+            # Check if we got valid data
+            if df is not None and not df.empty and len(df) > 100:
+                print(f"    SUCCESS! Downloaded {len(df)} daily price points")
+                print(f"    Date range: {df.index[0].date()} to {df.index[-1].date()}")
+                break
+            else:
+                print(f"    {method_name} returned insufficient data")
+                continue
 
-    except Exception as e:
-        print(f"    ERROR downloading data: {e}")
-        print("    Creating sample data for demonstration...")
-        # Fallback: create sample data
+        except Exception as e:
+            print(f"    {method_name} failed: {str(e)[:100]}")
+            continue
+
+    # If all methods failed, use sample data
+    if df is None or df.empty:
+        print("\n    All download methods failed!")
+        print("    Creating realistic sample data for demonstration...")
         df = _create_sample_data(years_back)
 
     # Create directory if it doesn't exist (like creating a folder)
